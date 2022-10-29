@@ -9,6 +9,7 @@ from dataset import EMOTIONS, resnet_transform
 from torch.nn.functional import softmax
 import cv2 as cv
 import numpy as np
+import pyautogui
 
 
 FACE_CASCADE_PATH = 'haarcascade_frontalface_default.xml'
@@ -35,10 +36,11 @@ def make_emoji_line(emoji_images, emotions):
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
-    argparser.add_argument('--mode', default='webcam', choices=['webcam', 'image'],
+    argparser.add_argument('--mode', default='webcam', choices=['webcam', 'image', 'screencap'],
                            help='webcam to get real-time input from webcam, image to classify one image')
     argparser.add_argument('--imgpath', type=str,
                            help='path to image in case of image classification mode')
+    
     args = argparser.parse_args()
     mode = args.mode
     img_path = args.imgpath
@@ -54,6 +56,70 @@ if __name__ == '__main__':
         prediction = softmax(model(image[None, :]), dim=-1)
         print(EMOTIONS)
         print(prediction)
+
+    elif mode == 'screencap':
+        
+        # Use OpenCV pre-trained cascade classifier for face recognition
+        # https://github.com/opencv/opencv/tree/3.4/data/haarcascades
+        face_cascade = cv.CascadeClassifier()
+
+        emoji_images = {emotion: cv.resize(cv.imread(os.path.join(EMOJI_FOLDER, emotion+'.png'),
+                                           cv.IMREAD_UNCHANGED), (EMOJI_SIZE, EMOJI_SIZE))
+                        for emotion in EMOTIONS if emotion != 'neutral'}
+        if not face_cascade.load(FACE_CASCADE_PATH):
+            raise Exception(f'Failed to load {FACE_CASCADE_PATH} , make sure it is in the program directory.')
+
+        #grab screnshot of current window with pyautogui
+        #https://pythonguides.com/python-screen-capture/
+        
+
+        while True:
+            cap = pyautogui.screenshot()
+            cap = np.array(cap)
+            frame = cv.cvtColor(cap, cv.COLOR_BGR2RGB)
+            if frame is None:
+                print("No captured frame - Terminating")
+                break
+
+            frame_gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(frame_gray)
+            #create a window to show the emoji
+            window = np.zeros((50, 200, 4), dtype=np.uint8)
+            for (x, y, w, h) in faces:
+                faceROI = frame_gray[y:y + h, x:x + w]
+                image = Image.fromarray(faceROI)
+                image = resnet_transform(image)
+                prediction = softmax(model(image[None, :]), dim=-1)
+                #print(EMOTIONS)
+                #print(prediction)
+        
+                emotions = dict(zip(EMOTIONS, prediction.tolist()[0]))
+                if 'neutral' in emotions:
+                    del emotions['neutral']
+                # Show all emotions as emoji in a row, set transparency proportionate to predicted score
+                emoji_line = make_emoji_line(emoji_images, emotions)
+                
+            
+                e_w = emoji_line.shape[1]
+                e_h = emoji_line.shape[0]
+                center_x = x + w // 2
+                center_x = max(e_w//2, center_x)
+                center_x = min(window.shape[1]-1-e_w//2, center_x)
+                y_bottom = min(y + h + 10 + e_h, window.shape[0]-1)
+                alpha = emoji_line[:, :, 3]
+                
+                for color in range(3):
+                    window[y_bottom-e_h:y_bottom, center_x-e_w//2:center_x+e_w//2, color] = (1 - alpha) * emoji_line[:, :, color] + \
+                        window[y_bottom-e_h:y_bottom, center_x-e_w//2:center_x+e_w//2, color] * alpha
+                
+            cv.imshow('Emotion detector', window)
+            if cv.waitKey(10) == 27:  # Exit on ESC
+                break
+        cv.destroyAllWindows()
+        
+        
+            
+            
 
     elif mode == 'webcam':
         # Use OpenCV pre-trained cascade classifier for face recognition
